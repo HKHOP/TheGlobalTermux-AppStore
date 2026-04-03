@@ -188,10 +188,11 @@ class ConfirmDialog(Gtk.MessageDialog):
         super().__init__(
             transient_for=parent,
             modal=True,
+            message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.YES_NO,
             text=title,
         )
-        self.format_secondary_text(detail)
+        self.set_property("secondary-text", detail)
 
 
 class InfoDialog(Gtk.MessageDialog):
@@ -199,10 +200,11 @@ class InfoDialog(Gtk.MessageDialog):
         super().__init__(
             transient_for=parent,
             modal=True,
+            message_type=Gtk.MessageType.INFO,
             buttons=Gtk.ButtonsType.OK,
             text=title,
         )
-        self.format_secondary_text(detail)
+        self.set_property("secondary-text", detail)
 
 
 class TermuxStoreWindow(Gtk.ApplicationWindow):
