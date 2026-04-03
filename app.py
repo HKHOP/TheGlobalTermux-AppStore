@@ -67,6 +67,33 @@ def detect_installed_packages() -> set[str]:
     return set()
 
 
+def shell_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def launch_command_in_terminal(command: str) -> tuple[bool, str]:
+    wrapped_command = f"{command}; printf '\\n'; printf 'Press Enter to close...'; read _"
+    terminal_commands = [
+        ["x-terminal-emulator", "-e", "bash", "-lc", wrapped_command],
+        ["xfce4-terminal", "--hold", "-e", f"bash -lc {shell_quote(wrapped_command)}"],
+        ["gnome-terminal", "--", "bash", "-lc", wrapped_command],
+        ["konsole", "-e", "bash", "-lc", wrapped_command],
+        ["xterm", "-hold", "-e", "bash", "-lc", wrapped_command],
+        ["bash", "-lc", wrapped_command],
+    ]
+
+    attempted = []
+    for candidate in terminal_commands:
+        attempted.append(candidate[0])
+        try:
+            subprocess.Popen(candidate)
+            return True, candidate[0]
+        except OSError:
+            continue
+
+    return False, ", ".join(attempted)
+
+
 def build_icon_widget(package: dict, size: int = 38) -> Gtk.Widget:
     icon_path = package.get("iconPath", "").strip()
     if icon_path:
@@ -720,20 +747,28 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         )
 
     def _start_install(self, command: str, package_name: str) -> None:
-        try:
-            subprocess.Popen(command, shell=True)
-            self.status_label.set_text(f"Started install for {package_name}")
-        except OSError as error:
-            self._show_info("Install failed", str(error))
-            self.status_label.set_text(f"Failed to start install for {package_name}")
+        success, launcher = launch_command_in_terminal(command)
+        if success:
+            self.status_label.set_text(f"Opened install for {package_name} in {launcher}")
+            return
+
+        self._show_info(
+            "Install failed",
+            f"Could not launch a terminal for the install command.\nTried: {launcher}",
+        )
+        self.status_label.set_text(f"Failed to start install for {package_name}")
 
     def _start_uninstall(self, command: str, package_name: str) -> None:
-        try:
-            subprocess.Popen(command, shell=True)
-            self.status_label.set_text(f"Started uninstall for {package_name}")
-        except OSError as error:
-            self._show_info("Uninstall failed", str(error))
-            self.status_label.set_text(f"Failed to start uninstall for {package_name}")
+        success, launcher = launch_command_in_terminal(command)
+        if success:
+            self.status_label.set_text(f"Opened uninstall for {package_name} in {launcher}")
+            return
+
+        self._show_info(
+            "Uninstall failed",
+            f"Could not launch a terminal for the uninstall command.\nTried: {launcher}",
+        )
+        self.status_label.set_text(f"Failed to start uninstall for {package_name}")
 
     def _reload_catalog(self, _button: Gtk.Button) -> None:
         self.packages = load_packages()
