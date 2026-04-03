@@ -1,6 +1,8 @@
 # Termux App Store
 
-A lightweight desktop GUI MVP for `termux-x11`. This project now starts as a Python GTK4 app that can:
+The missing software center for `termux-x11`: a GTK4 desktop app that makes Termux packages feel browseable, visual, and one click away from install.
+
+This project currently lets you:
 
 - list curated Termux packages
 - search packages by name, tags, and description
