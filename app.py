@@ -1260,7 +1260,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         title_label = Gtk.Label(label="Termux App Store")
         title_label.add_css_class("section-title")
         title_label.set_xalign(0)
-        subtitle_label = Gtk.Label(label="Browse and install terminal software")
+        subtitle_label = Gtk.Label(label="Browse and install Termux and X11 apps")
         subtitle_label.add_css_class("section-subtitle")
         subtitle_label.set_xalign(0)
         self.title_label = title_label
@@ -1811,7 +1811,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.back_button.set_visible(False)
         self.search_entry.set_visible(True)
         self.title_label.set_text("Termux App Store")
-        self.subtitle_label.set_text("Browse and install terminal software")
+        self.subtitle_label.set_text("Browse and install Termux and X11 apps")
 
     def _show_details_view(self) -> None:
         if self.selected_package is None:
