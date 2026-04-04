@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import threading
 from pathlib import Path
@@ -18,6 +19,10 @@ from gi.repository import Gdk, GLib, Gtk
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "src" / "data" / "apps.json"
 ASSETS_DIR = BASE_DIR / "assets" / "icons"
+APPSTORE_PACKAGE_ID = "termux-app-store"
+APPSTORE_PACKAGE_NAME = "termux-app-store"
+APPSTORE_REPO_URL = "https://github.com/HKHOP/TheGlobalTermux-AppStore.git"
+APPSTORE_MANIFEST_FILE = BASE_DIR / ".termux_app_store_install.json"
 
 
 def is_dark_gtk_theme(settings: Gtk.Settings | None) -> bool:
@@ -34,6 +39,28 @@ def load_packages() -> list[dict]:
     with DATA_FILE.open("r", encoding="utf-8") as file:
         apps = json.load(file)
 
+    app_store_entry = {
+        "id": APPSTORE_PACKAGE_ID,
+        "packageName": APPSTORE_PACKAGE_NAME,
+        "name": "Termux App Store",
+        "category": "System",
+        "summary": "Browse, install, and update software for your Termux desktop",
+        "description": (
+            "The store itself can now appear in the catalog, detect newer code on GitHub, "
+            "and update from inside the UI."
+        ),
+        "tags": ["store", "updates", "github", "system"],
+        "iconName": "system-software-install",
+        "source": "GitHub",
+        "homepage": APPSTORE_REPO_URL.removesuffix(".git"),
+        "maintainer": "HKHOP",
+        "installCommand": "",
+        "uninstallCommand": "",
+        "installed": True,
+        "isSelfPackage": True,
+    }
+    apps = [app_store_entry, *apps]
+
     for app in apps:
         app.setdefault("packageName", app.get("id", ""))
         app.setdefault("summary", app.get("description", ""))
@@ -44,7 +71,12 @@ def load_packages() -> list[dict]:
         app.setdefault("source", "Unknown source")
         app.setdefault("homepage", "")
         app.setdefault("uninstallCommand", "")
-        app["installed"] = False
+        app.setdefault("isSelfPackage", False)
+        app.setdefault("updateCommand", app.get("installCommand", ""))
+        app.setdefault("updateAvailable", False)
+        app.setdefault("latestVersion", "")
+        app.setdefault("currentVersion", "")
+        app["installed"] = bool(app.get("installed", False))
 
     return apps
 
@@ -76,6 +108,157 @@ def detect_installed_packages() -> set[str]:
         return set(lines)
 
     return set()
+
+
+def detect_upgradable_packages() -> tuple[set[str], dict[str, str]]:
+    commands = [
+        ["apt", "list", "--upgradable"],
+        ["pkg", "list-upgradable"],
+    ]
+
+    for command in commands:
+        try:
+            completed = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            continue
+
+        packages: set[str] = set()
+        latest_versions: dict[str, str] = {}
+        for raw_line in completed.stdout.splitlines():
+            line = raw_line.strip()
+            if not line or line.lower().startswith("listing"):
+                continue
+            if "/" not in line:
+                continue
+
+            package_name = line.split("/", 1)[0].strip()
+            if not package_name:
+                continue
+
+            packages.add(package_name)
+            latest_version = ""
+            if " upgradable from: " in line:
+                latest_version = line.split(" upgradable from: ", 1)[0].split()[-1].strip()
+            elif " upgradable to: " in line:
+                latest_version = line.split(" upgradable to: ", 1)[-1].strip()
+            elif len(line.split()) > 1:
+                latest_version = line.split()[1].strip()
+
+            latest_versions[package_name] = latest_version
+
+        return packages, latest_versions
+
+    return set(), {}
+
+
+def detect_installed_versions() -> dict[str, str]:
+    commands = [
+        ["dpkg-query", "-W", "-f=${binary:Package}\t${Version}\n"],
+        ["dpkg", "-l"],
+    ]
+
+    for command in commands:
+        try:
+            completed = subprocess.run(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            continue
+
+        versions: dict[str, str] = {}
+        for line in completed.stdout.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            if command[0] == "dpkg-query":
+                parts = stripped.split("\t", 1)
+                if len(parts) == 2:
+                    versions[parts[0].strip()] = parts[1].strip()
+                continue
+
+            if not stripped.startswith("ii"):
+                continue
+            parts = stripped.split()
+            if len(parts) >= 3:
+                versions[parts[1].strip()] = parts[2].strip()
+
+        return versions
+
+    return {}
+
+
+def read_app_store_manifest() -> dict:
+    if not APPSTORE_MANIFEST_FILE.exists():
+        return {}
+
+    try:
+        return json.loads(APPSTORE_MANIFEST_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _run_text_command(command: list[str], cwd: Path | None = None) -> str:
+    try:
+        completed = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            cwd=str(cwd) if cwd else None,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+    return completed.stdout.strip()
+
+
+def get_app_store_repo_url() -> str:
+    git_dir = BASE_DIR / ".git"
+    if git_dir.exists():
+        repo_url = _run_text_command(["git", "config", "--get", "remote.origin.url"], cwd=BASE_DIR)
+        if repo_url:
+            return repo_url
+
+    manifest_url = str(read_app_store_manifest().get("repo_url", "")).strip()
+    return manifest_url or APPSTORE_REPO_URL
+
+
+def get_local_app_store_version() -> str:
+    git_dir = BASE_DIR / ".git"
+    if git_dir.exists():
+        commit = _run_text_command(["git", "rev-parse", "HEAD"], cwd=BASE_DIR)
+        if commit:
+            return commit
+
+    return str(read_app_store_manifest().get("commit", "")).strip()
+
+
+def get_remote_app_store_version(repo_url: str) -> str:
+    if not repo_url:
+        return ""
+    output = _run_text_command(["git", "ls-remote", repo_url, "HEAD"])
+    return output.split()[0].strip() if output else ""
+
+
+def make_app_store_install_command(repo_url: str) -> str:
+    safe_repo = shlex.quote(repo_url)
+    return (
+        "pkg install -y git && "
+        "tmpdir=$(mktemp -d) && "
+        "trap 'rm -rf \"$tmpdir\"' EXIT && "
+        f"git clone --depth 1 {safe_repo} \"$tmpdir\" && "
+        "cd \"$tmpdir\" && "
+        "bash install.sh"
+    )
 
 
 def build_icon_widget(package: dict, size: int = 38) -> Gtk.Widget:
@@ -128,6 +311,12 @@ class PackageRow(Gtk.ListBoxRow):
         name.set_hexpand(True)
         name.add_css_class("package-name")
         title_row.append(name)
+
+        if package.get("updateAvailable"):
+            update_label = Gtk.Label(label="Update available")
+            update_label.set_xalign(1)
+            update_label.add_css_class("update-pill")
+            title_row.append(update_label)
 
         if package.get("installed"):
             installed_label = Gtk.Label(label="Installed")
@@ -209,6 +398,15 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.progress_pulse_source: int | None = None
         self.settings = Gtk.Settings.get_default()
         self.suppress_row_activation = False
+        self.installed_versions: dict[str, str] = {}
+        self.upgradable_packages: set[str] = set()
+        self.latest_package_versions: dict[str, str] = {}
+        self.app_store_update_check_in_progress = False
+        self.app_store_update_known = False
+        self.app_store_update_available = False
+        self.app_store_current_version = get_local_app_store_version()
+        self.app_store_latest_version = ""
+        self.app_store_repo_url = get_app_store_repo_url()
 
         self._load_css()
         self._build_ui()
@@ -370,6 +568,14 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             font-size: 12px;
         }
 
+        .update-pill {
+            background: #fff4cc;
+            color: #92400e;
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-size: 12px;
+        }
+
         .hero-card {
             background: #155e75;
             border-radius: 16px;
@@ -521,6 +727,11 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         window.dark .status-pill {
             background: #173223;
             color: #87d8a8;
+        }
+
+        window.dark .update-pill {
+            background: #4b3313;
+            color: #f7d28a;
         }
 
         window.dark .hero-card {
@@ -797,6 +1008,10 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.install_button.connect("clicked", self._run_install_command)
         button_row.append(self.install_button)
 
+        self.update_button = Gtk.Button(label="Update")
+        self.update_button.connect("clicked", self._run_update_command)
+        button_row.append(self.update_button)
+
         self.uninstall_button = Gtk.Button(label="Uninstall")
         self.uninstall_button.connect("clicked", self._run_uninstall_command)
         button_row.append(self.uninstall_button)
@@ -979,15 +1194,34 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.selected_package = package
         self.name_label.set_text(package["name"])
         self.hero_category_label.set_text(package["category"])
-        self.hero_state_label.set_text("Installed" if package.get("installed") else "Available")
-        self.meta_label.set_text(f"Package: {package['packageName']}")
-        self.install_state_label.set_text(
-            "Installed in Termux" if package.get("installed") else "Not currently installed"
-        )
+        hero_state = "Available"
+        if package.get("updateAvailable"):
+            hero_state = "Update available"
+        elif package.get("installed"):
+            hero_state = "Installed"
+        self.hero_state_label.set_text(hero_state)
+        self.hero_state_label.remove_css_class("status-pill")
+        self.hero_state_label.remove_css_class("update-pill")
+        self.hero_state_label.add_css_class("update-pill" if package.get("updateAvailable") else "status-pill")
+
+        meta_parts = [f"Package: {package['packageName']}"]
+        if package.get("currentVersion"):
+            meta_parts.append(f"Installed version: {package['currentVersion'][:12]}")
+        if package.get("latestVersion"):
+            meta_parts.append(f"Latest: {package['latestVersion'][:12]}")
+        self.meta_label.set_text(" | ".join(meta_parts))
+
+        if package.get("updateAvailable"):
+            install_state = "An update is ready to install"
+        elif package.get("installed"):
+            install_state = "Installed in Termux"
+        else:
+            install_state = "Not currently installed"
+        self.install_state_label.set_text(install_state)
         self.install_state_label.remove_css_class("status-installed")
         self.install_state_label.remove_css_class("status-missing")
         self.install_state_label.add_css_class(
-            "status-installed" if package.get("installed") else "status-missing"
+            "status-installed" if package.get("installed") or package.get("updateAvailable") else "status-missing"
         )
         self.source_label.set_text(f"Source: {package['source']}")
         self.maintainer_label.set_text(
@@ -995,8 +1229,10 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         )
         self.description_label.set_text(package["description"])
         self.tags_label.set_text(", ".join(package.get("tags", [])) or "No tags")
-        self.command_view.get_buffer().set_text(package["installCommand"])
-        self.install_button.set_sensitive(not package.get("installed"))
+        displayed_command = package.get("updateCommand") if package.get("updateAvailable") else package.get("installCommand")
+        self.command_view.get_buffer().set_text(displayed_command or "")
+        self.install_button.set_sensitive(bool(package.get("installCommand")) and not package.get("installed"))
+        self.update_button.set_sensitive(bool(package.get("updateAvailable") and package.get("updateCommand")))
         self.uninstall_button.set_sensitive(bool(package.get("installed") and package.get("uninstallCommand")))
         self.status_label.set_text(f"Selected {package['name']}")
         self._set_details_visible(True)
@@ -1006,6 +1242,8 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.name_label.set_text("No package selected")
         self.hero_category_label.set_text("")
         self.hero_state_label.set_text("")
+        self.hero_state_label.remove_css_class("update-pill")
+        self.hero_state_label.add_css_class("status-pill")
         self.meta_label.set_text("")
         self.install_state_label.set_text("")
         self.install_state_label.remove_css_class("status-installed")
@@ -1016,6 +1254,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.tags_label.set_text("")
         self.command_view.get_buffer().set_text("")
         self.install_button.set_sensitive(False)
+        self.update_button.set_sensitive(False)
         self.uninstall_button.set_sensitive(False)
         self.status_label.set_text("No packages available")
         self._set_details_visible(False)
@@ -1032,6 +1271,9 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.description_label.set_visible(visible)
         self.tags_label.set_visible(visible)
         self.command_view.set_visible(visible)
+        self.install_button.set_visible(visible)
+        self.update_button.set_visible(visible)
+        self.uninstall_button.set_visible(visible)
         self.empty_state.set_visible(not visible)
 
     def _show_browse_view(self) -> None:
@@ -1059,8 +1301,9 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             return
 
         clipboard = Gdk.Display.get_default().get_clipboard()
-        clipboard.set(self.selected_package["installCommand"])
-        self.status_label.set_text("Install command copied")
+        command = self.selected_package.get("updateCommand") if self.selected_package.get("updateAvailable") else self.selected_package.get("installCommand")
+        clipboard.set(command or "")
+        self.status_label.set_text("Command copied")
 
     def _run_install_command(self, _button: Gtk.Button) -> None:
         if not self.selected_package:
@@ -1076,6 +1319,26 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             f"Install {package_name}?",
             command,
             lambda confirmed: self._start_install(command, package_name) if confirmed else None,
+        )
+
+    def _run_update_command(self, _button: Gtk.Button) -> None:
+        if not self.selected_package:
+            self._show_info("No package selected", "Choose a package first.")
+            return
+        if self.operation_in_progress:
+            self._show_info("Operation in progress", "Please wait for the current command to finish.")
+            return
+
+        command = self.selected_package.get("updateCommand", "")
+        package_name = self.selected_package["name"]
+        if not command:
+            self._show_info("Update unavailable", "No update command is configured for this app.")
+            return
+
+        self._show_confirm(
+            f"Update {package_name}?",
+            command,
+            lambda confirmed: self._start_update(command, package_name) if confirmed else None,
         )
 
     def _run_uninstall_command(self, _button: Gtk.Button) -> None:
@@ -1112,9 +1375,17 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             action_label="Uninstalling",
         )
 
+    def _start_update(self, command: str, package_name: str) -> None:
+        self._start_command_execution(
+            command=command,
+            package_name=package_name,
+            action_label="Updating",
+        )
+
     def _start_command_execution(self, command: str, package_name: str, action_label: str) -> None:
         self.operation_in_progress = True
         self.install_button.set_sensitive(False)
+        self.update_button.set_sensitive(False)
         self.uninstall_button.set_sensitive(False)
         self.operation_progress.set_text(f"{action_label} {package_name}…")
         self.operation_progress.set_fraction(0.05)
@@ -1177,6 +1448,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             self.operation_progress.set_text(f"{action_label} complete")
             self._refresh_installed_state()
             self.refresh_package_list()
+            self._check_app_store_updates_async(force=True)
             final_status = f"{action_label} finished for {package_name}"
         else:
             self.operation_progress.set_fraction(0.0)
@@ -1198,6 +1470,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
     def _reload_catalog(self, _button: Gtk.Button) -> None:
         self.packages = load_packages()
         self._refresh_installed_state()
+        self._check_app_store_updates_async(force=True)
         self._populate_categories()
         self.refresh_package_list()
         self.status_label.set_text("Catalog reloaded")
@@ -1219,8 +1492,85 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
 
     def _refresh_installed_state(self) -> None:
         self.installed_packages = detect_installed_packages()
+        self.installed_versions = detect_installed_versions()
+        self.upgradable_packages, self.latest_package_versions = detect_upgradable_packages()
+
         for package in self.packages:
-            package["installed"] = package.get("packageName", "") in self.installed_packages
+            if package.get("isSelfPackage"):
+                self._populate_app_store_package(package)
+                continue
+
+            package_name = package.get("packageName", "")
+            package["installed"] = package_name in self.installed_packages
+            package["currentVersion"] = self.installed_versions.get(package_name, "")
+            package["latestVersion"] = self.latest_package_versions.get(package_name, "")
+            package["updateAvailable"] = package_name in self.upgradable_packages and package.get("installed", False)
+            package["updateCommand"] = package.get("installCommand", "")
+
+        self._check_app_store_updates_async()
+
+    def _populate_app_store_package(self, package: dict) -> None:
+        package["installed"] = True
+        package["source"] = "GitHub"
+        package["homepage"] = self.app_store_repo_url.removesuffix(".git")
+        package["currentVersion"] = self.app_store_current_version
+        package["latestVersion"] = self.app_store_latest_version
+        package["updateAvailable"] = self.app_store_update_available
+        package["installCommand"] = make_app_store_install_command(self.app_store_repo_url)
+        package["updateCommand"] = make_app_store_install_command(self.app_store_repo_url)
+        package["uninstallCommand"] = ""
+
+        if not self.app_store_update_known:
+            package["summary"] = "Checking GitHub for new app store updates"
+        elif self.app_store_update_available:
+            package["summary"] = "A newer app store version is available on GitHub"
+        else:
+            package["summary"] = "The app store is currently up to date"
+
+    def _check_app_store_updates_async(self, force: bool = False) -> None:
+        if self.app_store_update_check_in_progress:
+            return
+        if self.app_store_update_known and not force:
+            return
+
+        self.app_store_update_check_in_progress = True
+
+        def worker() -> None:
+            repo_url = get_app_store_repo_url()
+            local_version = get_local_app_store_version()
+            remote_version = get_remote_app_store_version(repo_url)
+            update_available = bool(local_version and remote_version and local_version != remote_version)
+            GLib.idle_add(
+                self._apply_app_store_update_result,
+                repo_url,
+                local_version,
+                remote_version,
+                update_available,
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_app_store_update_result(
+        self,
+        repo_url: str,
+        local_version: str,
+        remote_version: str,
+        update_available: bool,
+    ) -> bool:
+        self.app_store_repo_url = repo_url or APPSTORE_REPO_URL
+        self.app_store_current_version = local_version
+        self.app_store_latest_version = remote_version
+        self.app_store_update_available = update_available
+        self.app_store_update_known = bool(remote_version)
+        self.app_store_update_check_in_progress = False
+
+        for package in self.packages:
+            if package.get("isSelfPackage"):
+                self._populate_app_store_package(package)
+                break
+
+        self.refresh_package_list()
+        return False
 
     @staticmethod
     def _clear_listbox(listbox: Gtk.ListBox) -> None:
