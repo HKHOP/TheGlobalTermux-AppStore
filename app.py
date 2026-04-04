@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 from pathlib import Path
 
 os.environ.setdefault("GSK_RENDERER", "cairo")
@@ -67,35 +68,8 @@ def detect_installed_packages() -> set[str]:
     return set()
 
 
-def shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\"'\"'") + "'"
-
-
-def launch_command_in_terminal(command: str) -> tuple[bool, str]:
-    wrapped_command = f"{command}; printf '\\n'; printf 'Press Enter to close...'; read _"
-    terminal_commands = [
-        ["x-terminal-emulator", "-e", "bash", "-lc", wrapped_command],
-        ["xfce4-terminal", "--hold", "-e", f"bash -lc {shell_quote(wrapped_command)}"],
-        ["gnome-terminal", "--", "bash", "-lc", wrapped_command],
-        ["konsole", "-e", "bash", "-lc", wrapped_command],
-        ["xterm", "-hold", "-e", "bash", "-lc", wrapped_command],
-        ["bash", "-lc", wrapped_command],
-    ]
-
-    attempted = []
-    for candidate in terminal_commands:
-        attempted.append(candidate[0])
-        try:
-            subprocess.Popen(candidate)
-            return True, candidate[0]
-        except OSError:
-            continue
-
-    return False, ", ".join(attempted)
-
-
 def build_icon_widget(package: dict, size: int = 38) -> Gtk.Widget:
-    icon_path = package.get("iconPath", "").strip()
+    icon_path = (package.get("iconPath") or "").strip()
     if icon_path:
         candidate = Path(icon_path)
         if not candidate.is_absolute():
@@ -106,7 +80,11 @@ def build_icon_widget(package: dict, size: int = 38) -> Gtk.Widget:
             image.add_css_class("package-icon")
             return image
 
-    icon_name = package.get("iconName", "application-x-executable")
+    icon_name = (package.get("iconName") or "").strip()
+    icon_theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+    if not icon_name or (icon_theme is not None and not icon_theme.has_icon(icon_name)):
+        icon_name = "application-x-executable"
+
     image = Gtk.Image.new_from_icon_name(icon_name)
     image.set_pixel_size(size)
     image.add_css_class("package-icon")
@@ -217,6 +195,8 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.filtered_packages = self.packages[:]
         self.selected_package: dict | None = None
         self.current_category = "All"
+        self.operation_in_progress = False
+        self.progress_pulse_source: int | None = None
 
         self._load_css()
         self._build_ui()
@@ -611,6 +591,12 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.status_label.add_css_class("status-label")
         details.append(self.status_label)
 
+        self.operation_progress = Gtk.ProgressBar()
+        self.operation_progress.set_show_text(True)
+        self.operation_progress.set_text("Idle")
+        self.operation_progress.set_fraction(0.0)
+        details.append(self.operation_progress)
+
     def _populate_categories(self) -> None:
         self._clear_listbox(self.category_list)
 
@@ -722,6 +708,9 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         if not self.selected_package:
             self._show_info("No package selected", "Choose a package first.")
             return
+        if self.operation_in_progress:
+            self._show_info("Operation in progress", "Please wait for the current command to finish.")
+            return
 
         command = self.selected_package["installCommand"]
         package_name = self.selected_package["name"]
@@ -734,6 +723,9 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
     def _run_uninstall_command(self, _button: Gtk.Button) -> None:
         if not self.selected_package:
             self._show_info("No package selected", "Choose a package first.")
+            return
+        if self.operation_in_progress:
+            self._show_info("Operation in progress", "Please wait for the current command to finish.")
             return
 
         command = self.selected_package.get("uninstallCommand", "")
@@ -749,28 +741,101 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         )
 
     def _start_install(self, command: str, package_name: str) -> None:
-        success, launcher = launch_command_in_terminal(command)
-        if success:
-            self.status_label.set_text(f"Opened install for {package_name} in {launcher}")
-            return
-
-        self._show_info(
-            "Install failed",
-            f"Could not launch a terminal for the install command.\nTried: {launcher}",
+        self._start_command_execution(
+            command=command,
+            package_name=package_name,
+            action_label="Installing",
         )
-        self.status_label.set_text(f"Failed to start install for {package_name}")
 
     def _start_uninstall(self, command: str, package_name: str) -> None:
-        success, launcher = launch_command_in_terminal(command)
-        if success:
-            self.status_label.set_text(f"Opened uninstall for {package_name} in {launcher}")
-            return
-
-        self._show_info(
-            "Uninstall failed",
-            f"Could not launch a terminal for the uninstall command.\nTried: {launcher}",
+        self._start_command_execution(
+            command=command,
+            package_name=package_name,
+            action_label="Uninstalling",
         )
-        self.status_label.set_text(f"Failed to start uninstall for {package_name}")
+
+    def _start_command_execution(self, command: str, package_name: str, action_label: str) -> None:
+        self.operation_in_progress = True
+        self.install_button.set_sensitive(False)
+        self.uninstall_button.set_sensitive(False)
+        self.operation_progress.set_text(f"{action_label} {package_name}…")
+        self.operation_progress.set_fraction(0.05)
+        self.status_label.set_text(f"{action_label} {package_name}...")
+
+        if self.progress_pulse_source is not None:
+            GLib.source_remove(self.progress_pulse_source)
+        self.progress_pulse_source = GLib.timeout_add(120, self._pulse_progress_bar)
+
+        def run_command() -> None:
+            try:
+                completed = subprocess.run(
+                    ["bash", "-lc", command],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                GLib.idle_add(
+                    self._on_command_completed,
+                    action_label,
+                    package_name,
+                    completed.returncode,
+                    completed.stdout,
+                    completed.stderr,
+                )
+            except OSError as error:
+                GLib.idle_add(
+                    self._on_command_completed,
+                    action_label,
+                    package_name,
+                    -1,
+                    "",
+                    str(error),
+                )
+
+        threading.Thread(target=run_command, daemon=True).start()
+
+    def _pulse_progress_bar(self) -> bool:
+        if not self.operation_in_progress:
+            return False
+        self.operation_progress.pulse()
+        return True
+
+    def _on_command_completed(
+        self,
+        action_label: str,
+        package_name: str,
+        return_code: int,
+        stdout_text: str,
+        stderr_text: str,
+    ) -> bool:
+        self.operation_in_progress = False
+        if self.progress_pulse_source is not None:
+            GLib.source_remove(self.progress_pulse_source)
+            self.progress_pulse_source = None
+
+        command_succeeded = return_code == 0
+        if command_succeeded:
+            self.operation_progress.set_fraction(1.0)
+            self.operation_progress.set_text(f"{action_label} complete")
+            self._refresh_installed_state()
+            self.refresh_package_list()
+            final_status = f"{action_label} finished for {package_name}"
+        else:
+            self.operation_progress.set_fraction(0.0)
+            self.operation_progress.set_text(f"{action_label} failed")
+            failure_output = (stderr_text or stdout_text).strip()[-500:]
+            if not failure_output:
+                failure_output = "No command output was returned."
+            self._show_info(
+                f"{action_label} failed",
+                f"{package_name} could not be processed.\n\n{failure_output}",
+            )
+            final_status = f"{action_label} failed for {package_name}"
+
+        if self.selected_package:
+            self.show_package(self.selected_package)
+        self.status_label.set_text(final_status)
+        return False
 
     def _reload_catalog(self, _button: Gtk.Button) -> None:
         self.packages = load_packages()
