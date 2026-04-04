@@ -458,6 +458,75 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             padding: 18px;
         }
 
+        .details-app-header {
+            spacing: 18px;
+        }
+
+        .details-app-icon {
+            min-width: 88px;
+            min-height: 88px;
+            background: linear-gradient(135deg, #f472b6 0%, #60a5fa 52%, #facc15 100%);
+            border-radius: 26px;
+            padding: 14px;
+        }
+
+        .details-app-icon .package-icon {
+            color: #ffffff;
+        }
+
+        .details-title-block {
+            spacing: 6px;
+        }
+
+        .detail-subtitle {
+            color: #4b5563;
+            font-size: 18px;
+        }
+
+        .detail-support {
+            color: #6b7280;
+            font-size: 13px;
+        }
+
+        .preview-strip {
+            spacing: 12px;
+        }
+
+        .preview-card {
+            min-height: 156px;
+            background: linear-gradient(180deg, rgba(17,24,39,0.12) 0%, rgba(17,24,39,0.04) 100%);
+            border: 1px solid #d8dee4;
+            border-radius: 18px;
+            padding: 16px;
+        }
+
+        .preview-card-primary {
+            background: linear-gradient(135deg, #c7e0ff 0%, #8ec5ff 45%, #d8f3ff 100%);
+        }
+
+        .preview-card-secondary {
+            background: linear-gradient(135deg, #dfe6ee 0%, #f8fafc 100%);
+        }
+
+        .preview-card-tertiary {
+            background: linear-gradient(135deg, #bfd6ea 0%, #d7e7f7 100%);
+        }
+
+        .preview-card .package-icon {
+            color: rgba(15, 23, 42, 0.75);
+        }
+
+        .preview-title {
+            color: #111827;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .preview-copy {
+            color: #4b5563;
+            font-size: 12px;
+        }
+
         .details-section {
             background: #ffffff;
             border: 1px solid #e5e7eb;
@@ -610,6 +679,12 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             font-size: 14px;
         }
 
+        .body-copy {
+            color: #374151;
+            font-size: 15px;
+            line-height: 1.45;
+        }
+
         .install-label {
             color: #111827;
             font-weight: 700;
@@ -675,6 +750,46 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         window.dark .empty-state {
             background: #18212b;
             border-color: #2a3642;
+        }
+
+        window.dark .details-app-icon {
+            background: linear-gradient(135deg, #7c3aed 0%, #2563eb 50%, #0f766e 100%);
+        }
+
+        window.dark .detail-subtitle {
+            color: #d3dbe5;
+        }
+
+        window.dark .detail-support {
+            color: #9ba9b8;
+        }
+
+        window.dark .preview-card {
+            border-color: #2a3642;
+        }
+
+        window.dark .preview-card-primary {
+            background: linear-gradient(135deg, #124466 0%, #1f5c8e 50%, #2d7aa8 100%);
+        }
+
+        window.dark .preview-card-secondary {
+            background: linear-gradient(135deg, #202c38 0%, #293646 100%);
+        }
+
+        window.dark .preview-card-tertiary {
+            background: linear-gradient(135deg, #223445 0%, #2b4153 100%);
+        }
+
+        window.dark .preview-card .package-icon {
+            color: rgba(255, 255, 255, 0.88);
+        }
+
+        window.dark .preview-title {
+            color: #f4f7fb;
+        }
+
+        window.dark .preview-copy {
+            color: #c2ccd8;
         }
 
         window.dark .section-title {
@@ -755,6 +870,10 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         }
 
         window.dark .detail-description {
+            color: #d3dbe5;
+        }
+
+        window.dark .body-copy {
             color: #d3dbe5;
         }
 
@@ -961,7 +1080,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         details.set_margin_end(22)
         details_scroller.set_child(details)
 
-        details_hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        details_hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
         details_hero.add_css_class("details-hero")
         details.append(details_hero)
 
@@ -977,10 +1096,34 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.hero_state_label.add_css_class("status-pill")
         toolbar.append(self.hero_state_label)
 
+        app_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
+        app_header.add_css_class("details-app-header")
+        details_hero.append(app_header)
+
+        self.detail_icon_frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.detail_icon_frame.add_css_class("details-app-icon")
+        app_header.append(self.detail_icon_frame)
+
+        title_block = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        title_block.set_hexpand(True)
+        title_block.add_css_class("details-title-block")
+        app_header.append(title_block)
+
         self.name_label = Gtk.Label(label="Select a package")
         self.name_label.set_xalign(0)
         self.name_label.add_css_class("detail-title")
-        details_hero.append(self.name_label)
+        title_block.append(self.name_label)
+
+        self.detail_subtitle_label = Gtk.Label(label="")
+        self.detail_subtitle_label.set_xalign(0)
+        self.detail_subtitle_label.set_wrap(True)
+        self.detail_subtitle_label.add_css_class("detail-subtitle")
+        title_block.append(self.detail_subtitle_label)
+
+        self.detail_support_label = Gtk.Label(label="")
+        self.detail_support_label.set_xalign(0)
+        self.detail_support_label.add_css_class("detail-support")
+        title_block.append(self.detail_support_label)
 
         self.meta_label = Gtk.Label(label="")
         self.meta_label.set_xalign(0)
@@ -991,6 +1134,34 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.install_state_label.set_xalign(0)
         self.install_state_label.add_css_class("detail-meta")
         details_hero.append(self.install_state_label)
+
+        self.preview_strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.preview_strip.add_css_class("preview-strip")
+        details_hero.append(self.preview_strip)
+
+        self.preview_cards: list[tuple[Gtk.Box, Gtk.Box, Gtk.Label, Gtk.Label]] = []
+        for css_class in ("preview-card-primary", "preview-card-secondary", "preview-card-tertiary"):
+            preview = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+            preview.set_hexpand(True)
+            preview.add_css_class("preview-card")
+            preview.add_css_class(css_class)
+
+            icon_holder = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            preview.append(icon_holder)
+
+            preview_title = Gtk.Label(label="")
+            preview_title.set_xalign(0)
+            preview_title.add_css_class("preview-title")
+            preview.append(preview_title)
+
+            preview_copy = Gtk.Label(label="")
+            preview_copy.set_xalign(0)
+            preview_copy.set_wrap(True)
+            preview_copy.add_css_class("preview-copy")
+            preview.append(preview_copy)
+
+            self.preview_strip.append(preview)
+            self.preview_cards.append((preview, icon_holder, preview_title, preview_copy))
 
         actions_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         actions_section.add_css_class("details-section")
@@ -1050,14 +1221,19 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.maintainer_label.add_css_class("detail-meta")
         about_section.append(self.maintainer_label)
 
-        self.description_label = Gtk.Label(
-            label="Choose something from the catalog to inspect it here."
-        )
+        self.description_label = Gtk.Label(label="Choose something from the catalog to inspect it here.")
         self.description_label.set_xalign(0)
         self.description_label.set_wrap(True)
         self.description_label.set_max_width_chars(90)
         self.description_label.add_css_class("detail-description")
         about_section.append(self.description_label)
+
+        self.description_extra_label = Gtk.Label(label="")
+        self.description_extra_label.set_xalign(0)
+        self.description_extra_label.set_wrap(True)
+        self.description_extra_label.set_max_width_chars(90)
+        self.description_extra_label.add_css_class("body-copy")
+        about_section.append(self.description_extra_label)
 
         tags_section = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         tags_section.add_css_class("details-section")
@@ -1210,6 +1386,13 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         if package.get("latestVersion"):
             meta_parts.append(f"Latest: {package['latestVersion'][:12]}")
         self.meta_label.set_text(" | ".join(meta_parts))
+        self.detail_subtitle_label.set_text(package["summary"])
+        support_bits = [package["category"]]
+        if package.get("source"):
+            support_bits.append(package["source"])
+        if package.get("homepage"):
+            support_bits.append(package["homepage"].replace("https://", "").replace("http://", ""))
+        self.detail_support_label.set_text(" • ".join(support_bits))
 
         if package.get("updateAvailable"):
             install_state = "An update is ready to install"
@@ -1228,12 +1411,15 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             f"Maintainer: {package['maintainer']}" if package.get("maintainer") else ""
         )
         self.description_label.set_text(package["description"])
+        self.description_extra_label.set_text(self._build_description_extension(package))
         self.tags_label.set_text(", ".join(package.get("tags", [])) or "No tags")
         displayed_command = package.get("updateCommand") if package.get("updateAvailable") else package.get("installCommand")
         self.command_view.get_buffer().set_text(displayed_command or "")
         self.install_button.set_sensitive(bool(package.get("installCommand")) and not package.get("installed"))
         self.update_button.set_sensitive(bool(package.get("updateAvailable") and package.get("updateCommand")))
         self.uninstall_button.set_sensitive(bool(package.get("installed") and package.get("uninstallCommand")))
+        self._set_box_content(self.detail_icon_frame, build_icon_widget(package, 56))
+        self._populate_preview_cards(package)
         self.status_label.set_text(f"Selected {package['name']}")
         self._set_details_visible(True)
 
@@ -1245,30 +1431,67 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.hero_state_label.remove_css_class("update-pill")
         self.hero_state_label.add_css_class("status-pill")
         self.meta_label.set_text("")
+        self.detail_subtitle_label.set_text("")
+        self.detail_support_label.set_text("")
         self.install_state_label.set_text("")
         self.install_state_label.remove_css_class("status-installed")
         self.install_state_label.remove_css_class("status-missing")
         self.source_label.set_text("")
         self.maintainer_label.set_text("")
         self.description_label.set_text("No packages matched your filters.")
+        self.description_extra_label.set_text("")
         self.tags_label.set_text("")
         self.command_view.get_buffer().set_text("")
         self.install_button.set_sensitive(False)
         self.update_button.set_sensitive(False)
         self.uninstall_button.set_sensitive(False)
+        self._set_box_content(self.detail_icon_frame, None)
+        for _, icon_holder, preview_title, preview_copy in self.preview_cards:
+            self._set_box_content(icon_holder, None)
+            preview_title.set_text("")
+            preview_copy.set_text("")
         self.status_label.set_text("No packages available")
         self._set_details_visible(False)
         self._show_browse_view()
 
+    def _build_description_extension(self, package: dict) -> str:
+        tag_text = ", ".join(package.get("tags", [])[:4])
+        if tag_text:
+            return (
+                f"This package fits naturally into a {package['category'].lower()} workflow and is especially useful "
+                f"when you want quick access to {tag_text}. The store page is laid out to make the install path, "
+                "source, and current package status easier to scan at a glance."
+            )
+        return (
+            f"This package fits naturally into a {package['category'].lower()} workflow. The store page is laid out "
+            "to make the install path, source, and current package status easier to scan at a glance."
+        )
+
+    def _populate_preview_cards(self, package: dict) -> None:
+        preview_rows = [
+            ("Overview", package["summary"]),
+            ("Highlights", ", ".join(package.get("tags", [])[:3]) or package["category"]),
+            ("Install flow", package.get("updateCommand") if package.get("updateAvailable") else package.get("installCommand") or "No command available"),
+        ]
+        for (_, icon_holder, preview_title, preview_copy), (title, copy) in zip(self.preview_cards, preview_rows):
+            self._set_box_content(icon_holder, build_icon_widget(package, 34))
+            preview_title.set_text(title)
+            preview_copy.set_text(copy[:90])
+
     def _set_details_visible(self, visible: bool) -> None:
         self.hero_category_label.set_visible(visible)
         self.hero_state_label.set_visible(visible)
+        self.detail_icon_frame.set_visible(visible)
         self.name_label.set_visible(visible)
+        self.detail_subtitle_label.set_visible(visible)
+        self.detail_support_label.set_visible(visible)
         self.meta_label.set_visible(visible)
         self.install_state_label.set_visible(visible)
+        self.preview_strip.set_visible(visible)
         self.source_label.set_visible(visible)
         self.maintainer_label.set_visible(visible)
         self.description_label.set_visible(visible)
+        self.description_extra_label.set_visible(visible)
         self.tags_label.set_visible(visible)
         self.command_view.set_visible(visible)
         self.install_button.set_visible(visible)
@@ -1571,6 +1794,16 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
 
         self.refresh_package_list()
         return False
+
+    @staticmethod
+    def _set_box_content(container: Gtk.Box, child: Gtk.Widget | None) -> None:
+        current = container.get_first_child()
+        while current is not None:
+            next_child = current.get_next_sibling()
+            container.remove(current)
+            current = next_child
+        if child is not None:
+            container.append(child)
 
     @staticmethod
     def _clear_listbox(listbox: Gtk.ListBox) -> None:
