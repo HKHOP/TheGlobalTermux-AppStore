@@ -63,6 +63,7 @@ def load_packages() -> list[dict]:
             "and update from inside the UI."
         ),
         "tags": ["store", "updates", "github", "system"],
+        "iconPath": "assets/icons/termux-app-store.svg",
         "iconName": "system-software-install",
         "source": "GitHub",
         "homepage": APPSTORE_REPO_URL.removesuffix(".git"),
