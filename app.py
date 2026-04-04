@@ -97,6 +97,7 @@ def load_packages() -> list[dict]:
         app.setdefault("source", "Unknown source")
         app.setdefault("homepage", "")
         app.setdefault("uninstallCommand", "")
+        app.setdefault("installCheckPath", "")
         app.setdefault("isSelfPackage", False)
         app.setdefault("updateCommand", app.get("installCommand", ""))
         app.setdefault("updateAvailable", False)
@@ -338,6 +339,15 @@ def download_bytes(url: str) -> bytes:
 
 def download_text(url: str) -> str:
     return download_bytes(url).decode("utf-8")
+
+
+def expand_install_check_path(raw_path: str) -> Path | None:
+    path_text = str(raw_path or "").strip()
+    if not path_text:
+        return None
+
+    expanded = os.path.expandvars(os.path.expanduser(path_text))
+    return Path(expanded)
 
 
 def fetch_remote_catalog_manifest(repo_url: str, branch: str) -> dict:
@@ -2092,7 +2102,10 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
                 continue
 
             package_name = package.get("packageName", "")
-            package["installed"] = package_name in self.installed_packages
+            install_check_path = expand_install_check_path(package.get("installCheckPath", ""))
+            package["installed"] = package_name in self.installed_packages or bool(
+                install_check_path and install_check_path.exists()
+            )
             package["currentVersion"] = self.installed_versions.get(package_name, "")
             package["latestVersion"] = self.latest_package_versions.get(package_name, "")
             package["updateAvailable"] = package_name in self.upgradable_packages and package.get("installed", False)
