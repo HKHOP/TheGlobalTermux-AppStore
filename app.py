@@ -1436,7 +1436,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         install_section.add_css_class("details-section")
         details.append(install_section)
 
-        install_title = Gtk.Label(label="Install command")
+        install_title = Gtk.Label(label="Live command console")
         install_title.set_xalign(0)
         install_title.add_css_class("install-label")
         install_section.append(install_title)
@@ -1451,6 +1451,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.command_view.set_editable(False)
         self.command_view.set_cursor_visible(False)
         self.command_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.command_view.set_monospace(True)
         command_scroller.set_child(self.command_view)
 
         self.empty_state = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -1596,7 +1597,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.description_extra_label.set_text(self._build_description_extension(package))
         self.tags_label.set_text(", ".join(package.get("tags", [])) or "No tags")
         displayed_command = package.get("updateCommand") if package.get("updateAvailable") else package.get("installCommand")
-        self.command_view.get_buffer().set_text(displayed_command or "")
+        self._set_console_text(self._format_command_preview(displayed_command or ""))
         self.install_button.set_sensitive(bool(package.get("installCommand")) and not package.get("installed"))
         self.update_button.set_sensitive(bool(package.get("updateAvailable") and package.get("updateCommand")))
         self.uninstall_button.set_sensitive(bool(package.get("installed") and package.get("uninstallCommand")))
@@ -1623,7 +1624,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.description_label.set_text("No packages matched your filters.")
         self.description_extra_label.set_text("")
         self.tags_label.set_text("")
-        self.command_view.get_buffer().set_text("")
+        self._set_console_text("")
         self.install_button.set_sensitive(False)
         self.update_button.set_sensitive(False)
         self.uninstall_button.set_sensitive(False)
@@ -1710,6 +1711,20 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         clipboard.set(command or "")
         self.status_label.set_text("Command copied")
 
+    def _format_command_preview(self, command: str) -> str:
+        if not command.strip():
+            return "No command available for this package yet."
+        return f"$ {command}\n\nReady to run from inside the store."
+
+    def _set_console_text(self, text: str) -> None:
+        self.command_view.get_buffer().set_text(text)
+
+    def _append_console_text(self, text: str) -> bool:
+        buffer = self.command_view.get_buffer()
+        end_iter = buffer.get_end_iter()
+        buffer.insert(end_iter, text)
+        return False
+
     def _run_install_command(self, _button: Gtk.Button) -> None:
         if not self.selected_package:
             self._show_info("No package selected", "Choose a package first.")
@@ -1795,26 +1810,37 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.operation_progress.set_text(f"{action_label} {package_name}…")
         self.operation_progress.set_fraction(0.05)
         self.status_label.set_text(f"{action_label} {package_name}...")
+        self._set_console_text(f"$ {command}\n\n[{action_label}] Starting {package_name}...\n")
 
         if self.progress_pulse_source is not None:
             GLib.source_remove(self.progress_pulse_source)
         self.progress_pulse_source = GLib.timeout_add(120, self._pulse_progress_bar)
 
         def run_command() -> None:
+            output_chunks: list[str] = []
             try:
-                completed = subprocess.run(
+                process = subprocess.Popen(
                     ["bash", "-lc", command],
-                    check=False,
-                    capture_output=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
                     text=True,
+                    bufsize=1,
                 )
+                assert process.stdout is not None
+                for line in iter(process.stdout.readline, ""):
+                    if not line:
+                        break
+                    output_chunks.append(line)
+                    GLib.idle_add(self._append_console_text, line)
+                process.stdout.close()
+                return_code = process.wait()
                 GLib.idle_add(
                     self._on_command_completed,
                     action_label,
                     package_name,
-                    completed.returncode,
-                    completed.stdout,
-                    completed.stderr,
+                    return_code,
+                    "".join(output_chunks),
+                    "",
                 )
             except OSError as error:
                 GLib.idle_add(
@@ -1854,6 +1880,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
 
         command_succeeded = return_code == 0
         if command_succeeded:
+            GLib.idle_add(self._append_console_text, f"\n[{action_label}] Finished successfully.\n")
             self.operation_progress.set_fraction(1.0)
             self.operation_progress.set_text(f"{action_label} complete")
             self._refresh_installed_state()
@@ -1861,6 +1888,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             self._check_app_store_updates_async(force=True)
             final_status = f"{action_label} finished for {package_name}"
         else:
+            GLib.idle_add(self._append_console_text, f"\n[{action_label}] Failed with exit code {return_code}.\n")
             self.operation_progress.set_fraction(0.0)
             self.operation_progress.set_text(f"{action_label} failed")
             failure_output = (stderr_text or stdout_text).strip()[-500:]
