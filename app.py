@@ -334,10 +334,14 @@ def build_generated_icon_widget(package: dict, size: int) -> Gtk.Widget:
 
     frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
     frame.set_size_request(size, size)
+    frame.set_halign(Gtk.Align.FILL)
+    frame.set_valign(Gtk.Align.CENTER)
     frame.add_css_class("generated-icon")
     frame.add_css_class(accent_class)
 
     label = Gtk.Label(label=initial)
+    label.set_halign(Gtk.Align.CENTER)
+    label.set_valign(Gtk.Align.CENTER)
     label.add_css_class("generated-icon-label")
     frame.append(label)
     return frame
