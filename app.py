@@ -4,6 +4,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -1770,6 +1771,11 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         stdout_text: str,
         stderr_text: str,
     ) -> bool:
+        should_restart_app = bool(
+            action_label == "Updating"
+            and self.selected_package is not None
+            and self.selected_package.get("isSelfPackage")
+        )
         self.operation_in_progress = False
         if self.progress_pulse_source is not None:
             GLib.source_remove(self.progress_pulse_source)
@@ -1798,6 +1804,9 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         if self.selected_package:
             self.show_package(self.selected_package)
         self.status_label.set_text(final_status)
+        if command_succeeded and should_restart_app:
+            self.status_label.set_text("Update installed. Restarting app store...")
+            GLib.timeout_add(450, self._restart_application)
         return False
 
     def _reload_catalog(self, _button: Gtk.Button) -> None:
@@ -1903,6 +1912,23 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
                 break
 
         self.refresh_package_list()
+        return False
+
+    def _restart_application(self) -> bool:
+        app_path = BASE_DIR / "app.py"
+        try:
+            subprocess.Popen(
+                [sys.executable, str(app_path)],
+                cwd=str(BASE_DIR),
+            )
+        except OSError as error:
+            self._show_info("Restart failed", f"The update finished, but the app could not restart.\n\n{error}")
+            return False
+
+        app = self.get_application()
+        self.close()
+        if app is not None:
+            app.quit()
         return False
 
     @staticmethod
