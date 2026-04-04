@@ -275,21 +275,32 @@ def get_app_store_branch() -> str:
     return manifest_branch or DEFAULT_REPO_BRANCH
 
 
+def get_catalog_core_version(manifest: dict | None = None) -> str:
+    catalog_manifest = manifest if manifest is not None else read_catalog_manifest()
+    return str(catalog_manifest.get("core_version", "")).strip()
+
+
 def get_local_app_store_version() -> str:
+    installed_manifest = read_app_store_manifest()
+    installed_core_version = str(installed_manifest.get("core_version", "")).strip()
+    if installed_core_version:
+        return installed_core_version
+
+    installed_commit = str(installed_manifest.get("commit", "")).strip()
+    if installed_commit:
+        return installed_commit
+
+    catalog_core_version = get_catalog_core_version()
+    if catalog_core_version:
+        return catalog_core_version
+
     git_dir = BASE_DIR / ".git"
     if git_dir.exists():
         commit = _run_text_command(["git", "rev-parse", "HEAD"], cwd=BASE_DIR)
         if commit:
             return commit
 
-    return str(read_app_store_manifest().get("commit", "")).strip()
-
-
-def get_remote_app_store_version(repo_url: str) -> str:
-    if not repo_url:
-        return ""
-    output = _run_text_command(["git", "ls-remote", repo_url, "HEAD"])
-    return output.split()[0].strip() if output else ""
+    return ""
 
 
 def make_repo_web_base(repo_url: str) -> str:
@@ -329,15 +340,34 @@ def download_text(url: str) -> str:
     return download_bytes(url).decode("utf-8")
 
 
-def sync_remote_catalog(repo_url: str, branch: str) -> tuple[bool, str]:
+def fetch_remote_catalog_manifest(repo_url: str, branch: str) -> dict:
     raw_base = make_raw_base(repo_url, branch)
     if not raw_base:
-        return False, "Could not determine the GitHub raw URL for catalog sync."
+        raise ValueError("Could not determine the GitHub raw URL for catalog sync.")
 
     manifest_url = f"{raw_base}/src/data/catalog-manifest.json?v={CACHE_BUSTER}"
+    return json.loads(download_text(manifest_url))
+
+
+def get_remote_app_store_version(repo_url: str, branch: str) -> str:
+    if not repo_url:
+        return ""
+
     try:
-        remote_manifest = json.loads(download_text(manifest_url))
-    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as error:
+        remote_manifest = fetch_remote_catalog_manifest(repo_url, branch)
+    except (ValueError, urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        return ""
+
+    return get_catalog_core_version(remote_manifest)
+
+
+def sync_remote_catalog(repo_url: str, branch: str) -> tuple[bool, str]:
+    try:
+        remote_manifest = fetch_remote_catalog_manifest(repo_url, branch)
+        raw_base = make_raw_base(repo_url, branch)
+        if not raw_base:
+            return False, "Could not determine the GitHub raw URL for catalog sync."
+    except (ValueError, urllib.error.URLError, json.JSONDecodeError, TimeoutError) as error:
         return False, f"Catalog manifest download failed: {error}"
 
     apps_path = Path(str(remote_manifest.get("apps_json", "src/data/apps.json")))
@@ -376,6 +406,7 @@ def build_core_update_command(repo_url: str, branch: str) -> str:
         "uninstall.sh",
         "README.md",
         "LICENSE.txt",
+        "src/data/catalog-manifest.json",
         "assets/icons/termux-app-store.svg",
     ]
     download_lines = []
@@ -2097,12 +2128,14 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
 
         def worker() -> None:
             repo_url = get_app_store_repo_url()
+            branch = get_app_store_branch()
             local_version = get_local_app_store_version()
-            remote_version = get_remote_app_store_version(repo_url)
+            remote_version = get_remote_app_store_version(repo_url, branch)
             update_available = bool(local_version and remote_version and local_version != remote_version)
             GLib.idle_add(
                 self._apply_app_store_update_result,
                 repo_url,
+                branch,
                 local_version,
                 remote_version,
                 update_available,
@@ -2113,12 +2146,13 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
     def _apply_app_store_update_result(
         self,
         repo_url: str,
+        branch: str,
         local_version: str,
         remote_version: str,
         update_available: bool,
     ) -> bool:
         self.app_store_repo_url = repo_url or APPSTORE_REPO_URL
-        self.app_store_branch = get_app_store_branch()
+        self.app_store_branch = branch or DEFAULT_REPO_BRANCH
         write_app_store_manifest({"repo_url": self.app_store_repo_url, "branch": self.app_store_branch})
         self.app_store_current_version = local_version
         self.app_store_latest_version = remote_version

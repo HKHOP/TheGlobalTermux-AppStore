@@ -1,4 +1,5 @@
 {
+  "core_version": "2026.04.04.2",
   "apps_json": "src/data/apps.json",
   "icons": [
     "assets/icons/code-oss.svg",

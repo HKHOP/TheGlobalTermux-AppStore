@@ -12,6 +12,7 @@ DESKTOP_FILE="${DESKTOP_DIR}/termux-app-store.desktop"
 DEFAULT_REPO_URL="https://github.com/HKHOP/TheGlobalTermux-AppStore.git"
 MANIFEST_PATH="${INSTALL_ROOT}/.termux_app_store_install.json"
 DEFAULT_BRANCH="main"
+CATALOG_MANIFEST_PATH="${SCRIPT_DIR}/src/data/catalog-manifest.json"
 
 require_command() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -50,6 +51,7 @@ write_manifest() {
     local repo_url="${DEFAULT_REPO_URL}"
     local commit=""
     local branch="${DEFAULT_BRANCH}"
+    local core_version=""
 
     if command -v git >/dev/null 2>&1; then
         repo_url="$(git -C "${SCRIPT_DIR}" config --get remote.origin.url 2>/dev/null || printf '%s' "${DEFAULT_REPO_URL}")"
@@ -57,11 +59,29 @@ write_manifest() {
         branch="$(git -C "${SCRIPT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || printf '%s' "${DEFAULT_BRANCH}")"
     fi
 
+    if [ -f "${CATALOG_MANIFEST_PATH}" ]; then
+        core_version="$(python - <<'PY' "${CATALOG_MANIFEST_PATH}"
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, json.JSONDecodeError):
+    print("")
+else:
+    print(str(data.get("core_version", "")).strip())
+PY
+)"
+    fi
+
     cat > "${MANIFEST_PATH}" <<EOF
 {
   "repo_url": "${repo_url}",
   "commit": "${commit}",
-  "branch": "${branch}"
+  "branch": "${branch}",
+  "core_version": "${core_version}"
 }
 EOF
 }
