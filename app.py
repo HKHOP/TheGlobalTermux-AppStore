@@ -6,6 +6,9 @@ import shlex
 import subprocess
 import sys
 import threading
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 os.environ.setdefault("GSK_RENDERER", "cairo")
@@ -24,7 +27,16 @@ APPSTORE_PACKAGE_ID = "termux-app-store"
 APPSTORE_PACKAGE_NAME = "termux-app-store"
 APPSTORE_REPO_URL = "https://github.com/HKHOP/TheGlobalTermux-AppStore.git"
 APPSTORE_MANIFEST_FILE = BASE_DIR / ".termux_app_store_install.json"
+CATALOG_MANIFEST_FILE = BASE_DIR / "src" / "data" / "catalog-manifest.json"
 WINDOW_STATE_FILE = Path.home() / ".config" / "termux-app-store" / "window-state.json"
+CACHE_DIR = Path.home() / ".cache" / "termux-app-store"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_CORE_DIR = CACHE_DIR / "core-update"
+CACHE_CORE_DIR.mkdir(parents=True, exist_ok=True)
+CACHE_CATALOG_DIR = CACHE_DIR / "catalog-sync"
+CACHE_CATALOG_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_REPO_BRANCH = "main"
+CACHE_BUSTER = "20260404"
 CATEGORY_FALLBACK_ICONS = {
     "Development": ["applications-development", "code-context", "text-x-script"],
     "Editors": ["accessories-text-editor", "text-editor", "document-edit"],
@@ -220,6 +232,12 @@ def read_app_store_manifest() -> dict:
         return {}
 
 
+def write_app_store_manifest(updates: dict) -> None:
+    manifest = read_app_store_manifest()
+    manifest.update(updates)
+    APPSTORE_MANIFEST_FILE.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
 def _run_text_command(command: list[str], cwd: Path | None = None) -> str:
     try:
         completed = subprocess.run(
@@ -246,6 +264,17 @@ def get_app_store_repo_url() -> str:
     return manifest_url or APPSTORE_REPO_URL
 
 
+def get_app_store_branch() -> str:
+    git_dir = BASE_DIR / ".git"
+    if git_dir.exists():
+        branch = _run_text_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=BASE_DIR)
+        if branch and branch != "HEAD":
+            return branch
+
+    manifest_branch = str(read_app_store_manifest().get("branch", "")).strip()
+    return manifest_branch or DEFAULT_REPO_BRANCH
+
+
 def get_local_app_store_version() -> str:
     git_dir = BASE_DIR / ".git"
     if git_dir.exists():
@@ -263,15 +292,106 @@ def get_remote_app_store_version(repo_url: str) -> str:
     return output.split()[0].strip() if output else ""
 
 
-def make_app_store_install_command(repo_url: str) -> str:
-    safe_repo = shlex.quote(repo_url)
+def make_repo_web_base(repo_url: str) -> str:
+    normalized = repo_url.removesuffix(".git")
+    if normalized.startswith("git@github.com:"):
+        normalized = normalized.replace("git@github.com:", "https://github.com/")
+    return normalized
+
+
+def make_raw_base(repo_url: str, branch: str) -> str:
+    web_base = make_repo_web_base(repo_url)
+    parsed = urllib.parse.urlparse(web_base)
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if parsed.netloc.lower() != "github.com" or len(path_parts) < 2:
+        return ""
+    owner, repo = path_parts[:2]
+    return f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}"
+
+
+def read_catalog_manifest() -> dict:
+    if not CATALOG_MANIFEST_FILE.exists():
+        return {"apps_json": "src/data/apps.json", "icons": []}
+
+    try:
+        return json.loads(CATALOG_MANIFEST_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"apps_json": "src/data/apps.json", "icons": []}
+
+
+def download_bytes(url: str) -> bytes:
+    request = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read()
+
+
+def download_text(url: str) -> str:
+    return download_bytes(url).decode("utf-8")
+
+
+def sync_remote_catalog(repo_url: str, branch: str) -> tuple[bool, str]:
+    raw_base = make_raw_base(repo_url, branch)
+    if not raw_base:
+        return False, "Could not determine the GitHub raw URL for catalog sync."
+
+    manifest_url = f"{raw_base}/src/data/catalog-manifest.json?v={CACHE_BUSTER}"
+    try:
+        remote_manifest = json.loads(download_text(manifest_url))
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError) as error:
+        return False, f"Catalog manifest download failed: {error}"
+
+    apps_path = Path(str(remote_manifest.get("apps_json", "src/data/apps.json")))
+    icon_paths = [Path(path) for path in remote_manifest.get("icons", [])]
+
+    try:
+        apps_target = BASE_DIR / apps_path
+        apps_target.parent.mkdir(parents=True, exist_ok=True)
+        apps_url = f"{raw_base}/{apps_path.as_posix()}?v={CACHE_BUSTER}"
+        apps_target.write_bytes(download_bytes(apps_url))
+
+        for icon_path in icon_paths:
+            icon_target = BASE_DIR / icon_path
+            icon_target.parent.mkdir(parents=True, exist_ok=True)
+            icon_url = f"{raw_base}/{icon_path.as_posix()}?v={CACHE_BUSTER}"
+            icon_target.write_bytes(download_bytes(icon_url))
+
+        CATALOG_MANIFEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        CATALOG_MANIFEST_FILE.write_text(json.dumps(remote_manifest, indent=2), encoding="utf-8")
+    except (OSError, urllib.error.URLError, TimeoutError) as error:
+        return False, f"Catalog assets download failed: {error}"
+
+    return True, f"Catalog synced ({len(icon_paths)} icons updated)."
+
+
+def build_core_update_command(repo_url: str, branch: str) -> str:
+    raw_base = make_raw_base(repo_url, branch)
+    if not raw_base:
+        return ""
+
+    cache_core = shlex.quote(str(CACHE_CORE_DIR))
+    raw_base_q = shlex.quote(raw_base)
+    core_files = [
+        "app.py",
+        "install.sh",
+        "uninstall.sh",
+        "README.md",
+        "LICENSE.txt",
+        "assets/icons/termux-app-store.svg",
+    ]
+    download_lines = []
+    for relative_path in core_files:
+        relative_q = shlex.quote(relative_path)
+        target_path = shlex.quote(str(CACHE_CORE_DIR / relative_path))
+        target_dir = shlex.quote(str((CACHE_CORE_DIR / relative_path).parent))
+        download_lines.append(
+            f"mkdir -p {target_dir} && curl -fsSL {raw_base_q}/{relative_path}?v={CACHE_BUSTER} -o {target_path}"
+        )
+
     return (
-        "pkg install -y git && "
-        "tmpdir=$(mktemp -d) && "
-        "trap 'rm -rf \"$tmpdir\"' EXIT && "
-        f"git clone --depth 1 {safe_repo} \"$tmpdir\" && "
-        "cd \"$tmpdir\" && "
-        "bash install.sh"
+        "pkg install -y curl && "
+        f"rm -rf {cache_core} && mkdir -p {cache_core} && "
+        + " && ".join(download_lines)
+        + f" && cd {cache_core} && bash install.sh"
     )
 
 
@@ -498,6 +618,8 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self.app_store_current_version = get_local_app_store_version()
         self.app_store_latest_version = ""
         self.app_store_repo_url = get_app_store_repo_url()
+        self.app_store_branch = get_app_store_branch()
+        self.catalog_sync_in_progress = False
 
         self._load_css()
         self._build_ui()
@@ -508,6 +630,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         self._populate_categories()
         self.refresh_package_list()
         self._apply_saved_window_state()
+        self._sync_catalog_async(silent=True)
 
     def _load_css(self) -> None:
         css = b"""
@@ -1910,12 +2033,7 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         return False
 
     def _reload_catalog(self, _button: Gtk.Button) -> None:
-        self.packages = load_packages()
-        self._refresh_installed_state()
-        self._check_app_store_updates_async(force=True)
-        self._populate_categories()
-        self.refresh_package_list()
-        self.status_label.set_text("Catalog reloaded")
+        self._sync_catalog_async(force=True)
 
     def _show_info(self, title: str, detail: str) -> None:
         dialog = InfoDialog(self, title, detail)
@@ -1958,8 +2076,8 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         package["currentVersion"] = self.app_store_current_version
         package["latestVersion"] = self.app_store_latest_version
         package["updateAvailable"] = self.app_store_update_available
-        package["installCommand"] = make_app_store_install_command(self.app_store_repo_url)
-        package["updateCommand"] = make_app_store_install_command(self.app_store_repo_url)
+        package["installCommand"] = build_core_update_command(self.app_store_repo_url, self.app_store_branch)
+        package["updateCommand"] = build_core_update_command(self.app_store_repo_url, self.app_store_branch)
         package["uninstallCommand"] = ""
 
         if not self.app_store_update_known:
@@ -2000,6 +2118,8 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
         update_available: bool,
     ) -> bool:
         self.app_store_repo_url = repo_url or APPSTORE_REPO_URL
+        self.app_store_branch = get_app_store_branch()
+        write_app_store_manifest({"repo_url": self.app_store_repo_url, "branch": self.app_store_branch})
         self.app_store_current_version = local_version
         self.app_store_latest_version = remote_version
         self.app_store_update_available = update_available
@@ -2012,6 +2132,38 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
                 break
 
         self.refresh_package_list()
+        return False
+
+    def _sync_catalog_async(self, force: bool = False, silent: bool = False) -> None:
+        if self.catalog_sync_in_progress:
+            return
+
+        self.catalog_sync_in_progress = True
+        if not silent:
+            self.status_label.set_text("Syncing catalog and icons...")
+
+        def worker() -> None:
+            repo_url = get_app_store_repo_url()
+            branch = get_app_store_branch()
+            success, message = sync_remote_catalog(repo_url, branch)
+            GLib.idle_add(self._apply_catalog_sync_result, success, message, silent)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_catalog_sync_result(self, success: bool, message: str, silent: bool) -> bool:
+        self.catalog_sync_in_progress = False
+        self.packages = load_packages()
+        self._refresh_installed_state()
+        self._populate_categories()
+        self.refresh_package_list()
+
+        if success:
+            if not silent:
+                self.status_label.set_text(message)
+        else:
+            if not silent:
+                self.status_label.set_text("Catalog sync failed")
+            self._show_info("Catalog sync failed", message)
         return False
 
     def _restart_application(self) -> bool:

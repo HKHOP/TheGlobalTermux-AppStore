@@ -1,0 +1,26 @@
+{
+  "apps_json": "src/data/apps.json",
+  "icons": [
+    "assets/icons/code-oss.svg",
+    "assets/icons/firefox.svg",
+    "assets/icons/fish.svg",
+    "assets/icons/fzf.svg",
+    "assets/icons/gimp.svg",
+    "assets/icons/git.svg",
+    "assets/icons/golang.svg",
+    "assets/icons/htop.svg",
+    "assets/icons/inkscape.svg",
+    "assets/icons/jq.svg",
+    "assets/icons/keepassxc.svg",
+    "assets/icons/nano.svg",
+    "assets/icons/neovim.svg",
+    "assets/icons/nodejs.svg",
+    "assets/icons/openssh.svg",
+    "assets/icons/python.svg",
+    "assets/icons/ripgrep.svg",
+    "assets/icons/rust.svg",
+    "assets/icons/termux-app-store.svg",
+    "assets/icons/tmux.svg",
+    "assets/icons/vlc.svg"
+  ]
+}
