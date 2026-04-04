@@ -24,6 +24,7 @@ APPSTORE_PACKAGE_ID = "termux-app-store"
 APPSTORE_PACKAGE_NAME = "termux-app-store"
 APPSTORE_REPO_URL = "https://github.com/HKHOP/TheGlobalTermux-AppStore.git"
 APPSTORE_MANIFEST_FILE = BASE_DIR / ".termux_app_store_install.json"
+WINDOW_STATE_FILE = Path.home() / ".config" / "termux-app-store" / "window-state.json"
 CATEGORY_FALLBACK_ICONS = {
     "Development": ["applications-development", "code-context", "text-x-script"],
     "Editors": ["accessories-text-editor", "text-editor", "document-edit"],
@@ -273,6 +274,26 @@ def make_app_store_install_command(repo_url: str) -> str:
     )
 
 
+def load_window_state() -> dict:
+    if not WINDOW_STATE_FILE.exists():
+        return {}
+
+    try:
+        return json.loads(WINDOW_STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_window_state(width: int, height: int, maximized: bool) -> None:
+    WINDOW_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    state = {
+        "width": max(640, int(width)),
+        "height": max(480, int(height)),
+        "maximized": bool(maximized),
+    }
+    WINDOW_STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
 def build_icon_widget(package: dict, size: int = 38) -> Gtk.Widget:
     icon_path = (package.get("iconPath") or "").strip()
     if icon_path:
@@ -450,7 +471,13 @@ class InfoDialog(Gtk.MessageDialog):
 class TermuxStoreWindow(Gtk.ApplicationWindow):
     def __init__(self, app: Gtk.Application) -> None:
         super().__init__(application=app, title="Termux App Store")
-        self.set_default_size(1280, 760)
+        self.window_state = load_window_state()
+        self._window_state_dirty = False
+        self._window_state_save_source: int | None = None
+        self.set_default_size(
+            int(self.window_state.get("width", 1280)),
+            int(self.window_state.get("height", 760)),
+        )
 
         self.packages = load_packages()
         self.installed_packages = set()
@@ -473,11 +500,13 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
 
         self._load_css()
         self._build_ui()
+        self._setup_window_state_tracking()
         self._setup_theme_monitor()
         self._sync_theme()
         self._refresh_installed_state()
         self._populate_categories()
         self.refresh_package_list()
+        self._apply_saved_window_state()
 
     def _load_css(self) -> None:
         css = b"""
@@ -1051,6 +1080,44 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             self.add_css_class("dark")
         else:
             self.remove_css_class("dark")
+
+    def _setup_window_state_tracking(self) -> None:
+        self.connect("close-request", self._on_close_request)
+        self.connect("notify::maximized", self._on_window_state_changed)
+        self.connect("notify::default-width", self._on_window_state_changed)
+        self.connect("notify::default-height", self._on_window_state_changed)
+
+    def _apply_saved_window_state(self) -> None:
+        if self.window_state.get("maximized"):
+            self.maximize()
+
+    def _on_window_state_changed(self, *_args: object) -> None:
+        self._schedule_window_state_save()
+
+    def _schedule_window_state_save(self) -> None:
+        self._window_state_dirty = True
+        if self._window_state_save_source is not None:
+            return
+        self._window_state_save_source = GLib.timeout_add(250, self._flush_window_state_save)
+
+    def _flush_window_state_save(self) -> bool:
+        self._window_state_save_source = None
+        if not self._window_state_dirty:
+            return False
+
+        self._window_state_dirty = False
+        width = self.get_default_width()
+        height = self.get_default_height()
+        if width <= 0:
+            width = self.get_width()
+        if height <= 0:
+            height = self.get_height()
+        save_window_state(width, height, self.is_maximized())
+        return False
+
+    def _on_close_request(self, *_args: object) -> bool:
+        self._flush_window_state_save()
+        return False
 
     def _build_ui(self) -> None:
         root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
