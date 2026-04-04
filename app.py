@@ -23,6 +23,17 @@ APPSTORE_PACKAGE_ID = "termux-app-store"
 APPSTORE_PACKAGE_NAME = "termux-app-store"
 APPSTORE_REPO_URL = "https://github.com/HKHOP/TheGlobalTermux-AppStore.git"
 APPSTORE_MANIFEST_FILE = BASE_DIR / ".termux_app_store_install.json"
+CATEGORY_FALLBACK_ICONS = {
+    "Development": ["applications-development", "code-context", "text-x-script"],
+    "Editors": ["accessories-text-editor", "text-editor", "document-edit"],
+    "Media": ["multimedia-video-player", "applications-multimedia", "audio-x-generic"],
+    "Security": ["security-high", "preferences-system-privacy", "network-workgroup"],
+    "Internet": ["web-browser", "applications-internet", "network-workgroup"],
+    "Office": ["x-office-document", "applications-office", "accessories-text-editor"],
+    "Graphics": ["applications-graphics", "image-x-generic", "palette"],
+    "Utilities": ["applications-utilities", "utilities-terminal", "applications-system"],
+    "System": ["applications-system", "system-software-install", "preferences-system"],
+}
 
 
 def is_dark_gtk_theme(settings: Gtk.Settings | None) -> bool:
@@ -273,15 +284,62 @@ def build_icon_widget(package: dict, size: int = 38) -> Gtk.Widget:
             image.add_css_class("package-icon")
             return image
 
-    icon_name = (package.get("iconName") or "").strip()
     icon_theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
-    if not icon_name or (icon_theme is not None and not icon_theme.has_icon(icon_name)):
-        icon_name = "application-x-executable"
+    icon_candidates: list[str] = []
 
-    image = Gtk.Image.new_from_icon_name(icon_name)
-    image.set_pixel_size(size)
-    image.add_css_class("package-icon")
-    return image
+    explicit_icon = (package.get("iconName") or "").strip()
+    if explicit_icon:
+        icon_candidates.append(explicit_icon)
+
+    for key in ("packageName", "id"):
+        value = (package.get(key) or "").strip()
+        if value:
+            icon_candidates.extend(
+                [
+                    value,
+                    value.replace(".", "-"),
+                    value.replace("-", "_"),
+                    f"{value}-desktop",
+                ]
+            )
+
+    icon_candidates.extend(CATEGORY_FALLBACK_ICONS.get(package.get("category", ""), []))
+    icon_candidates.extend(["application-x-addon", "application-default-icon", "applications-other"])
+
+    seen: set[str] = set()
+    for icon_name in icon_candidates:
+        if not icon_name or icon_name in seen:
+            continue
+        seen.add(icon_name)
+        if icon_theme is not None and icon_theme.has_icon(icon_name):
+            image = Gtk.Image.new_from_icon_name(icon_name)
+            image.set_pixel_size(size)
+            image.add_css_class("package-icon")
+            return image
+
+    return build_generated_icon_widget(package, size)
+
+
+def build_generated_icon_widget(package: dict, size: int) -> Gtk.Widget:
+    initial = (package.get("name") or package.get("packageName") or "?").strip()[:1].upper() or "?"
+    category = str(package.get("category", "")).lower()
+    accent_class = "generated-icon-system"
+    if category in {"development", "editors"}:
+        accent_class = "generated-icon-dev"
+    elif category in {"media", "graphics"}:
+        accent_class = "generated-icon-media"
+    elif category in {"internet", "security"}:
+        accent_class = "generated-icon-net"
+
+    frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    frame.set_size_request(size, size)
+    frame.add_css_class("generated-icon")
+    frame.add_css_class(accent_class)
+
+    label = Gtk.Label(label=initial)
+    label.add_css_class("generated-icon-label")
+    frame.append(label)
+    return frame
 
 
 class PackageRow(Gtk.ListBoxRow):
@@ -612,6 +670,34 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
             color: #2563eb;
         }
 
+        .generated-icon {
+            border-radius: 18px;
+            background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+            padding: 0;
+        }
+
+        .generated-icon-dev {
+            background: linear-gradient(135deg, #bfdbfe 0%, #93c5fd 100%);
+        }
+
+        .generated-icon-media {
+            background: linear-gradient(135deg, #fde68a 0%, #f9a8d4 100%);
+        }
+
+        .generated-icon-net {
+            background: linear-gradient(135deg, #86efac 0%, #67e8f9 100%);
+        }
+
+        .generated-icon-system {
+            background: linear-gradient(135deg, #d1d5db 0%, #93c5fd 100%);
+        }
+
+        .generated-icon-label {
+            color: #0f172a;
+            font-size: 20px;
+            font-weight: 800;
+        }
+
         .package-summary {
             color: #6b7280;
         }
@@ -824,6 +910,30 @@ class TermuxStoreWindow(Gtk.ApplicationWindow):
 
         window.dark .package-icon {
             color: #7cc7ff;
+        }
+
+        window.dark .generated-icon {
+            background: linear-gradient(135deg, #1d3557 0%, #274c77 100%);
+        }
+
+        window.dark .generated-icon-dev {
+            background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%);
+        }
+
+        window.dark .generated-icon-media {
+            background: linear-gradient(135deg, #9d174d 0%, #7c3aed 100%);
+        }
+
+        window.dark .generated-icon-net {
+            background: linear-gradient(135deg, #0f766e 0%, #0369a1 100%);
+        }
+
+        window.dark .generated-icon-system {
+            background: linear-gradient(135deg, #334155 0%, #475569 100%);
+        }
+
+        window.dark .generated-icon-label {
+            color: #f8fafc;
         }
 
         window.dark .package-summary {
